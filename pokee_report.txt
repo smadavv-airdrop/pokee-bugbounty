@@ -1,0 +1,178 @@
+Bug Bounty Report: pokee.ai
+Target: pokee.ai, api.pokee.ai
+Submission: support@pokee.ai (subject: "Bug Bounty")
+Analyst: Fikri Aziz Fadzoli
+Date: 2026-11-18
+
+FINDINGS SUMMARY
+Total: 6 findings
+- HIGH: 0
+- MEDIUM: 1 (FINDING-5)
+- LOW: 4 (FINDING-1, FINDING-2, FINDING-3, FINDING-4)
+- INFORMATIONAL: 1 (FINDING-6)
+
+PLATFORM OVERVIEW
+pokee.ai is an AI/ML platform offering:
+- Pokee-Isaac 28B v0.1 - 10M-token context agentic model
+- Public API (api.pokee.ai) - OpenAI-compatible chat completions
+- Enterprise API (your-tenant.enterprise.pokee.ai) - Custom REST API for agent workflows
+
+ATTACK SURFACE DISCOVERED
+1. Public API (api.pokee.ai)
+   Endpoints:
+   - GET /v1/models - List models (auth required)
+   - POST /v1/chat/completions - Chat completions (auth required)
+   - GET /v1/chat/completions/{id} - Poll background completion (auth required)
+   - GET /v1/chat/completions/{id}?stream=true - Resume stream (auth required)
+   - POST /v1/chat/completions/{id}/cancel - Cancel background (auth required)
+   - GET /v1/health - Public health check (no auth)
+   - GET /v1/health?deep=1 - Deep health check (auth required)
+   Authentication: Bearer token (show-once key from developer console)
+   Rate Limits: Free 500 req/min, 20M tokens/min, 10 concurrent; Paid 500 req/min, 20M tokens/min, 25 concurrent
+
+2. Enterprise API (Enterprise customers only)
+   Base URL: https://your-tenant.enterprise.pokee.ai
+   Authentication: pk_<tenant>_<token> format
+   Endpoints:
+   - GET /health - Liveness check (no auth)
+   - POST /v1/sessions - Create session
+   - GET /v1/sessions - List sessions
+   - DELETE /v1/sessions - Bulk delete
+   - GET /v1/sessions/{id} - Get session
+   - DELETE /v1/sessions/{id} - Destroy session
+   - POST /v1/sessions/{id}/messages - Send message (SSE)
+   - GET /v1/sessions/{id}/files - List files
+   - GET /v1/sessions/{id}/files/{path} - Download file
+   - PUT /v1/sessions/{id}/files/{path} - Upload file
+   - DELETE /v1/sessions/{id}/files/{path} - Delete file
+   - GET /v1/usage - Usage + credit balance
+   - GET /v1/skills - List custom skills
+   - POST /v1/skills/{name} - Install skill (zip)
+   - DELETE /v1/skills/{name} - Uninstall skill
+   - GET /v1/sessions/{id}/responses/{rid}/events - Resume stream
+   - POST /v1/sessions/{id}/responses/{rid}/cancel - Cancel stream
+   - POST /v1/responses - Stateless function calling
+   - GET /v1/responses/{rid}/events - Resume response
+   - POST /v1/responses/{rid}/cancel - Cancel response
+   - POST /v1/chat/completions - Direct Isaac API (per tenant)
+
+3. Web Applications
+   - console.pokee.ai - Developer console (Clerk auth)
+   - accounts.pokee.ai - Authentication (Cloudflare protected)
+   - developer.pokee.ai - Marketing/docs (redirects to console)
+   - docs.pokee.ai - Enterprise API documentation
+   - status.pokee.ai - Status page
+   - deepresearch.pokee.ai - Deep Research API (health endpoint)
+
+DETAILED FINDINGS
+
+FINDING-1: CORS Misconfiguration on Public API
+Severity: LOW
+Type: Security Misconfiguration
+CVSS 3.1: 3.1 (AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N)
+Endpoint: api.pokee.ai/v1/health and all API endpoints
+Description:
+The API returns "access-control-allow-origin: *" allowing any origin to make authenticated requests. Combined with credential-based auth (Bearer tokens), this enables cross-origin requests from malicious sites if users have valid tokens in localStorage/cookies.
+Evidence:
+HTTP Response Headers from OPTIONS request:
+access-control-allow-origin: *
+access-control-allow-headers: Authorization, Content-Type, Idempotency-Key, Last-Event-ID, X-Pokee-Model
+access-control-allow-methods: GET, POST, OPTIONS
+Impact:
+Potential token theft via malicious websites if users are logged in. An attacker could craft a malicious website that makes authenticated requests to the API using the victim's credentials (if stored in browser).
+Remediation:
+Restrict Access-Control-Allow-Origin to specific trusted domains. Implement a proper CORS policy that only allows the official console domain (console.pokee.ai) and documented integration domains.
+
+FINDING-2: Missing security.txt
+Severity: LOW
+Type: Information Disclosure
+CVSS 3.1: 0.0 (Not a direct vulnerability, but security hygiene issue)
+Endpoint: pokee.ai/.well-known/security.txt, api.pokee.ai/.well-known/security.txt
+Description:
+No security.txt file at /.well-known/security.txt on pokee.ai or api.pokee.ai. No clear security contact information publicly available.
+Evidence:
+GET https://pokee.ai/.well-known/security.txt -> 404/Unknown endpoint
+GET https://api.pokee.ai/.well-known/security.txt -> {"error":{"message":"Unknown endpoint: GET /.well-known/security.txt","type":"invalid_request_error","code":"unknown_endpoint"}}
+Impact:
+Researchers cannot easily find responsible disclosure process. May delay vulnerability reporting.
+Remediation:
+Create security.txt at /.well-known/security.txt with contact information, policy URL, and encryption key per RFC 9116.
+
+FINDING-3: Information Disclosure via Enterprise API Documentation
+Severity: LOW
+Type: Information Disclosure
+CVSS 3.1: 2.6 (AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N)
+Endpoint: docs.pokee.ai/docs/api-reference
+Description:
+Full Enterprise API reference publicly accessible including endpoint structure, authentication format (pk_<tenant>_<token>), and internal API design. This aids attackers in crafting targeted attacks against enterprise tenants.
+Evidence:
+Accessible at https://docs.pokee.ai/docs/api-reference without authentication. Contains complete endpoint listing, authentication scheme, error codes, and architectural details.
+Impact:
+Reconnaissance assistance for enterprise tenant targeting. Attackers can understand the API surface before attempting exploitation.
+Remediation:
+Consider restricting API reference documentation to authenticated enterprise customers only, or remove sensitive implementation details from public documentation.
+
+FINDING-4: No Rate Limiting on Public Health Endpoint
+Severity: LOW
+Type: Denial of Service
+CVSS 3.1: 3.7 (AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L)
+Endpoint: api.pokee.ai/v1/health
+Description:
+The /health endpoint has no authentication and no apparent rate limiting. Could be abused for amplification or DoS.
+Evidence:
+Multiple rapid requests to GET https://api.pokee.ai/v1/health return 200 OK with no rate limit headers (X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After).
+Response: {"status":"ok","checks":{"d1":"ok","kv":"ok"}}
+Impact:
+Potential resource exhaustion through automated requests. Could be used as amplification vector if response size grows.
+Remediation:
+Implement rate limiting on public endpoints. Add rate limit headers and enforce per-IP limits.
+
+FINDING-5: Enterprise Tenant Subdomain Enumeration
+Severity: MEDIUM
+Type: Broken Access Control / Information Disclosure
+CVSS 3.1: 5.3 (AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N)
+Endpoint: *.enterprise.pokee.ai (wildcard subdomain pattern)
+Description:
+Enterprise tenants use format "your-tenant.enterprise.pokee.ai". No protection against subdomain enumeration. Attackers can enumerate valid tenant subdomains and target them specifically.
+Evidence:
+DNS enumeration reveals pattern: enterprise tenants receive dedicated subdomains under enterprise.pokee.ai. The documentation at docs.pokee.ai explicitly shows "https://your-tenant.enterprise.pokee.ai" as the endpoint format. No wildcard DNS protection or subdomain enumeration prevention observed.
+Impact:
+Tenant enumeration enables targeted attacks against specific enterprise customers. Attackers can identify valid tenants, then attempt authentication bypass, credential stuffing, or API abuse against known tenants.
+Remediation:
+Implement subdomain enumeration protection (wildcard DNS with authentication at edge), use non-guessable tenant identifiers, or require VPN/private network access for enterprise API.
+
+FINDING-6: Cloudflare Bot Protection Blocks Legitimate Researchers
+Severity: INFORMATIONAL
+Type: Availability
+Endpoint: accounts.pokee.ai/sign-up
+Description:
+Cloudflare Turnstile blocks automated sign-up, preventing researchers from creating accounts to test the API with valid credentials.
+Evidence:
+Accessing https://accounts.pokee.ai/sign-up returns Cloudflare challenge page: "Performing security verification. This website uses a security service to protect against malicious bots."
+Impact:
+Hinders security testing by legitimate researchers. May prevent responsible disclosure testing.
+Remediation:
+Consider allowing researcher access program or providing test credentials for bug bounty participants. Document researcher-friendly access in bug bounty policy.
+
+ADDITIONAL ATTACK VECTORS FOR AUTHENTICATED TESTING
+The following require valid API key (manual sign-up needed due to Cloudflare):
+1. IDOR on background completions - test if completion IDs are predictable/accessible across accounts
+2. Rate limit bypass - test X-Forwarded-For, multiple API keys, header manipulation
+3. Injection in chat completions - SQL/NoSQL/Template injection via message content
+4. Long-context boundary - test 10M token limit, memory exhaustion
+5. Streaming/SSE manipulation - connection smuggling, resume after disconnect race conditions
+6. Background completion race conditions - poll/cancel/resume concurrency
+7. Idempotency key reuse - cross-request replay protection
+8. Enterprise API session isolation - test if session IDs are accessible across tenants
+9. File upload/download path traversal - test ../ in file paths
+10. Skill installation - malicious zip upload, path traversal in skill packages
+
+REFERENCES
+- RFC 9116: security.txt
+- CORS Specification: https://fetch.spec.whatwg.org/#cors-protocol
+- OWASP API Security Top 10: https://owasp.org/www-project-api-security/
+
+CONTACT
+Analyst: Fikri Aziz Fadzoli
+Email: fyk.faf@gmail.com
+GitHub: https://github.com/smadavv-airdrop/pokee-bugbounty (public)
